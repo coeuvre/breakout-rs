@@ -1,5 +1,5 @@
 [package]
-name = "breakout-rs"
+name = "breakout"
 version = "0.1.0"
 authors = ["Coeuvre Wong <coeuvre@gmail.com>"]
 edition = "2018"
@@ -9,4 +9,4 @@ edition = "2018"
 [dependencies]
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["winuser"] }
+winapi = { version = "0.3", features = ["winuser", "wingdi", "memoryapi", "winnt", "profileapi"] }
