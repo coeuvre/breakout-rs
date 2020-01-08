@@ -1,5 +1,7 @@
 use crate::math::{clamp, Vec2};
 
+static SCALE: f32 = 0.01;
+
 pub struct RenderBuffer<'a> {
     pub pixels: &'a mut [u32],
     pub width: i32,
@@ -29,17 +31,13 @@ impl<'a> RenderBuffer<'a> {
     }
 
     pub fn draw_rect(&mut self, mut p: Vec2, mut half_size: Vec2, color: u32) {
-        let mut aspect_multiplier = self.height as f32;
-        if (self.width as f32 / self.height as f32) < 1.77 {
-            aspect_multiplier = self.width as f32 / 1.77;
-        }
+        let aspect_multiplier = self.calc_aspect_multiplier();
 
-        let scale = 0.01;
-        half_size.x *= aspect_multiplier * scale;
-        half_size.y *= aspect_multiplier * scale;
+        half_size.x *= aspect_multiplier * SCALE;
+        half_size.y *= aspect_multiplier * SCALE;
 
-        p.x *= aspect_multiplier * scale;
-        p.y *= aspect_multiplier * scale;
+        p.x *= aspect_multiplier * SCALE;
+        p.y *= aspect_multiplier * SCALE;
 
         p.x += self.width as f32 * 0.5;
         p.y += self.height as f32 * 0.5;
@@ -50,5 +48,26 @@ impl<'a> RenderBuffer<'a> {
         let y1 = (p.y + half_size.y) as i32;
 
         self.draw_rect_in_pixels(x0, y0, x1, y1, color);
+    }
+
+    pub fn pixels_to_world(&self, pixels: Vec2) -> Vec2 {
+        let aspect_multiplier = self.calc_aspect_multiplier();
+
+        let mut result = Vec2::zero();
+        result.x = pixels.x as f32 - self.width as f32 * 0.5;
+        result.y = pixels.y as f32 - self.height as f32 * 0.5;
+
+        result.x /= aspect_multiplier * SCALE;
+        result.y /= aspect_multiplier * SCALE;
+
+        result
+    }
+
+    fn calc_aspect_multiplier(&self) -> f32 {
+        if (self.width as f32 / self.height as f32) < 1.77 {
+            self.width as f32 / 1.77
+        } else {
+            self.height as f32
+        }
     }
 }
