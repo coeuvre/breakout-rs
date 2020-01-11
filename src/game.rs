@@ -1,54 +1,29 @@
+use crate::input::mouse::Button;
+use crate::input::Input;
 use crate::math::*;
 use crate::software_rendering::*;
 
 #[derive(Copy, Clone)]
-pub struct ButtonState {
-    pub is_down: bool,
-    pub changed: bool,
+struct Block {
+    p: Vec2,
+    block_size: Vec2,
+    life: i32,
 }
 
-impl ButtonState {
-    pub fn is_down(&self) -> bool {
-        self.is_down
-    }
-
-    pub fn pressed(&self) -> bool {
-        self.is_down && self.changed
-    }
-
-    pub fn released(&self) -> bool {
-        !self.is_down && self.changed
-    }
-}
-
-pub enum ButtonType {
-    LEFT,
-    RIGHT,
-    UP,
-    DOWN,
-
-    COUNT,
-}
-
-pub struct Input {
-    pub mouse: Vec2,
-    pub buttons: [ButtonState; ButtonType::COUNT as usize],
-}
-
-impl Input {
-    pub fn new() -> Input {
-        Input {
-            mouse: Vec2::new(0.0, 0.0),
-            buttons: [ButtonState {
-                is_down: false,
-                changed: false,
-            }; ButtonType::COUNT as usize],
+impl Block {
+    pub fn new() -> Block {
+        Block {
+            p: Vec2::zero(),
+            block_size: Vec2::zero(),
+            life: 0,
         }
     }
 }
 
 pub struct Game {
     initialized: bool,
+    blocks: Vec<Block>,
+    arena_half_size: Vec2,
     player_p: Vec2,
     player_half_size: Vec2,
     player_dp: Vec2,
@@ -61,6 +36,8 @@ impl Game {
     pub fn new() -> Game {
         Game {
             initialized: false,
+            blocks: vec![Block::new(); 64],
+            arena_half_size: Vec2::zero(),
             player_p: Vec2::zero(),
             player_half_size: Vec2::zero(),
             player_dp: Vec2::zero(),
@@ -74,6 +51,8 @@ impl Game {
         if !self.initialized {
             self.initialized = true;
 
+            self.arena_half_size = Vec2::new(85.0, 45.0);
+
             self.player_p.y = -40.0;
             self.player_half_size = Vec2::new(10.0, 2.0);
 
@@ -82,26 +61,57 @@ impl Game {
             self.ball_dp.y = -40.0;
         }
 
-        let player_new_x = render_buffer.pixels_to_world(input.mouse).x;
-        self.player_dp.x = (player_new_x - self.player_p.x) / dt;
-        self.player_p.x = player_new_x;
+        let mut mouse_p = render_buffer.pixels_to_world(input.mouse.position);
 
-        self.ball_p = self.ball_p + self.ball_dp * dt;
+        let mut collided = false;
 
-        if self.ball_dp.y < 0.0
-            && aabb_vs_aabb(
-                self.player_p,
-                self.player_half_size,
-                self.ball_p,
-                self.ball_half_size,
-            )
-        {
-            self.ball_dp.y *= -1.0;
-            self.ball_dp.x += self.player_dp.x;
+        //        let new_player_p = Vec2::new(mouse_p.x, self.player_p.y);
+        let new_player_p = if input.mouse.button(Button::Left).is_down() {
+            mouse_p
+        } else {
+            self.player_p
+        };
+        let player_movement = Line2::new(self.player_p, new_player_p);
+
+        let mut ball_movement = Line2::new(self.ball_p, self.ball_p + (self.ball_dp) * dt);
+
+        // ball vs player
+        if let Some(collision) = swept_aabb2(
+            &ball_movement,
+            self.ball_half_size,
+            self.player_p,
+            self.player_half_size,
+        ) {
+            if (ball_movement.end - ball_movement.start) * collision.normal < 0.0 {
+                ball_movement.truncate(collision.t);
+                self.ball_dp = self.ball_dp.reflect(&collision.normal);
+            }
         }
 
-        render_buffer.clear(0x551100);
+        self.player_p = player_movement.end;
+        self.player_dp = (player_movement.end - player_movement.start) / dt;
+
+        // ball vs arena
+        if let Some(collision) = swept_aabb2(
+            &ball_movement,
+            -self.ball_half_size,
+            Vec2::zero(),
+            self.arena_half_size,
+        ) {
+            if (ball_movement.end - ball_movement.start) * collision.normal > 0.0 {
+                ball_movement.truncate(collision.t);
+                self.ball_dp = self.ball_dp.reflect(&collision.normal);
+            }
+        }
+
+        self.ball_p = ball_movement.end;
+
+        render_buffer.clear_and_draw_rect(Vec2::zero(), self.arena_half_size, 0x551100, 0x220500);
         render_buffer.draw_rect(self.ball_p, self.ball_half_size, 0x00ffff);
-        render_buffer.draw_rect(self.player_p, self.player_half_size, 0x00ff00);
+        if collided {
+            render_buffer.draw_rect(self.player_p, self.player_half_size, 0xff0000);
+        } else {
+            render_buffer.draw_rect(self.player_p, self.player_half_size, 0x00ff00);
+        }
     }
 }

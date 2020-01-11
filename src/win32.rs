@@ -11,6 +11,9 @@ use winapi::um::winnt::*;
 use winapi::um::winuser::*;
 
 use crate::game::*;
+use crate::input::keyboard::*;
+use crate::input::mouse::Button;
+use crate::input::Input;
 use crate::software_rendering::*;
 
 struct Win32RenderBuffer {
@@ -117,14 +120,31 @@ unsafe fn do_run() {
     let mut last_dt = 0.01666;
 
     while RUNNING {
-        for i in 0..ButtonType::COUNT as usize {
-            input.buttons[i].changed = false;
-        }
+        input.keyboard.keys.iter_mut().for_each(|key| {
+            key.was_down = false;
+        });
+
+        input.mouse.buttons.iter_mut().for_each(|button| {
+            button.was_down = button.is_down;
+        });
 
         let mut msg = std::mem::MaybeUninit::<MSG>::uninit();
         while PeekMessageW(msg.as_mut_ptr(), hwnd, 0 as UINT, 0 as UINT, PM_REMOVE) != 0 {
             let msg = msg.assume_init();
             match msg.message {
+                WM_LBUTTONDOWN => {
+                    input.mouse.button_mut(Button::Left).is_down = true;
+                }
+                WM_LBUTTONUP => {
+                    input.mouse.button_mut(Button::Left).is_down = false;
+                }
+                WM_RBUTTONDOWN => {
+                    input.mouse.button_mut(Button::Right).is_down = true;
+                }
+                WM_RBUTTONUP => {
+                    input.mouse.button_mut(Button::Right).is_down = false;
+                }
+
                 WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
                     let vk_code = msg.wParam as i32;
                     let was_down = (msg.lParam & (1 << 30)) != 0;
@@ -133,16 +153,16 @@ unsafe fn do_run() {
                     macro_rules! process_key {
                         ($vk:expr, $b:expr) => {
                             if vk_code == $vk {
-                                let button = &mut input.buttons[$b as usize];
-                                button.is_down = is_down;
-                                button.changed = was_down != is_down;
+                                let key = &mut input.keyboard.key_mut($b);
+                                key.is_down = is_down;
+                                key.was_down = was_down;
                             }
                         };
                     }
-                    process_key!(VK_LEFT, ButtonType::LEFT);
-                    process_key!(VK_RIGHT, ButtonType::RIGHT);
-                    process_key!(VK_UP, ButtonType::UP);
-                    process_key!(VK_DOWN, ButtonType::DOWN);
+                    process_key!(VK_LEFT, Key::Left);
+                    process_key!(VK_RIGHT, Key::Right);
+                    process_key!(VK_UP, Key::Up);
+                    process_key!(VK_DOWN, Key::Down);
                 }
                 _ => {
                     TranslateMessage(&msg);
@@ -155,8 +175,8 @@ unsafe fn do_run() {
         GetCursorPos(&mut mouse_pointer);
         ScreenToClient(hwnd, &mut mouse_pointer);
 
-        input.mouse.x = mouse_pointer.x as f32;
-        input.mouse.y = (render_buffer.height - mouse_pointer.y) as f32;
+        input.mouse.position.x = mouse_pointer.x as f32;
+        input.mouse.position.y = (render_buffer.height - mouse_pointer.y) as f32;
 
         // Simulation
         {

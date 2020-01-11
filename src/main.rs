@@ -1,6 +1,8 @@
-mod game;
-mod math;
-mod software_rendering;
+pub mod game;
+pub mod input;
+pub mod line;
+pub mod math;
+pub mod software_rendering;
 
 #[cfg(windows)]
 mod win32;
