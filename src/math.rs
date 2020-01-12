@@ -40,27 +40,31 @@ impl Line2 {
         self.end = self.point(t);
     }
 
-    /// See https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection#Given_two_points_on_each_line
-    pub fn intersection(&self, other: &Line2) -> Option<(f32, f32)> {
-        let x1 = self.start.x;
-        let y1 = self.start.y;
-        let x2 = self.end.x;
-        let y2 = self.end.y;
-        let x3 = other.start.x;
-        let y3 = other.start.y;
-        let x4 = other.end.x;
-        let y4 = other.end.y;
-
-        let det = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-        if det == 0.0 {
-            return None;
-        }
-
-        let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / det;
-        let u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / det;
-
-        Some((t, u))
+    pub fn vec(&self) -> Vec2 {
+        self.end - self.start
     }
+}
+
+/// See https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection#Given_two_points_on_each_line
+pub fn line_intersection(
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    x3: f32,
+    y3: f32,
+    x4: f32,
+    y4: f32,
+) -> Option<(f32, f32)> {
+    let det = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if det == 0.0 {
+        return None;
+    }
+
+    let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / det;
+    let u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / det;
+
+    Some((t, u))
 }
 
 pub struct Collision2 {
@@ -126,7 +130,16 @@ pub fn swept_aabb2(
     edges
         .iter()
         .filter_map(|edge| {
-            if let Some((t, u)) = movement.intersection(edge) {
+            if let Some((t, u)) = line_intersection(
+                movement.start.x,
+                movement.start.y,
+                movement.end.x,
+                movement.end.y,
+                edge.start.x,
+                edge.start.y,
+                edge.end.x,
+                edge.end.y,
+            ) {
                 if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
                     return Some((edge, t));
                 }
@@ -141,7 +154,7 @@ pub fn swept_aabb2(
         })
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
@@ -164,6 +177,11 @@ impl Vec2 {
 
     pub fn normalized(&self) -> Vec2 {
         let len = self.len();
+
+        if len == 0.0 {
+            return Vec2::zero();
+        }
+
         Vec2::new(self.x / len, self.y / len)
     }
 
@@ -256,7 +274,7 @@ impl Div<f32> for Vec2 {
 
     #[inline(always)]
     fn div(self, rhs: f32) -> Self::Output {
-        Vec2::new(self.x * rhs, self.y * rhs)
+        self * (1.0 / rhs)
     }
 }
 
@@ -308,4 +326,47 @@ pub fn aabb_vs_aabb(p1: Vec2, half_size1: Vec2, p2: Vec2, half_size2: Vec2) -> b
 #[inline(always)]
 fn intersect(left1: f32, right1: f32, left2: f32, right2: f32) -> bool {
     !(left2 > right1 || right2 < left1)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_swept_aabb2() {
+        let object_center = Vec2::new(0.0, 10.0);
+        let object_velocity = Vec2::new(0.0, -5.0);
+        let object_radius = Vec2::new(1.0, 1.0);
+
+        let obstacle_center = Vec2::new(0.0, -20.0);
+        let obstacle_velocity = Vec2::new(0.0, 50.0);
+        let obstacle_radius = Vec2::new(10.0, 1.0);
+
+        let collision = swept_aabb2(
+            &Line2::new(object_center, object_center + object_velocity),
+            object_radius,
+            obstacle_center,
+            object_radius,
+        );
+        assert!(collision.is_none());
+
+        let collision = swept_aabb2(
+            &Line2::new(
+                object_center,
+                object_center + object_velocity - obstacle_velocity,
+            ),
+            object_radius,
+            obstacle_center,
+            object_radius,
+        );
+        assert!(collision.is_some());
+        let collision = collision.unwrap();
+        assert!(collision.t >= 0.0 && collision.t <= 1.0);
+    }
+
+    #[test]
+    fn test_reflect() {
+        let normal = Vec2::new(-1.0, 0.0);
+        assert_eq!(Vec2::new(1.0, 0.0).reflect(&normal), Vec2::new(-1.0, 0.0));
+    }
 }
