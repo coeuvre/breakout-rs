@@ -89,6 +89,12 @@ impl<T> IndexVec<T> {
         }
     }
 
+    pub fn clear(&mut self) {
+        for i in 0..self.entries.len() {
+            self.remove(i);
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

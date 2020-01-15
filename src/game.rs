@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 
 use crate::index_vec::{GIndex, IndexVec};
+use crate::input::mouse::Button;
 use crate::input::Input;
 use crate::math::*;
 use crate::software_rendering::*;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Entity {
     pub tags: HashSet<String>,
 
@@ -30,9 +31,11 @@ pub struct Game {
     initialized: bool,
     arena_half_size: Vec2,
 
+    levels: Vec<Box<dyn Level>>,
+    current_level: usize,
+
     entities: IndexVec<Entity>,
 
-    balls: Vec<GIndex>,
     player: Option<GIndex>,
 }
 
@@ -41,21 +44,11 @@ impl Game {
         Game::default()
     }
 
-    pub fn simulate(&mut self, render_buffer: &mut RenderBuffer, input: &Input, dt: f32) {
-        if !self.initialized {
-            self.initialized = true;
+    fn load_level(&mut self, level_index: usize) {
+        if let Some(level) = self.levels.get(level_index) {
+            self.entities.clear();
 
             self.arena_half_size = Vec2::new(85.0, 45.0);
-
-            // player
-            {
-                let mut player = Entity::new();
-                player.tags.insert("Player".to_string());
-                player.position.y = -40.0;
-                player.half_size = Vec2::new(10.0, 2.0);
-                player.color = Some(0x00ff00);
-                self.player = Some(self.entities.insert(player));
-            }
 
             // arena
             {
@@ -79,36 +72,35 @@ impl Game {
 
                 let mut bottom = Entity::new();
                 bottom.tags.insert("Wall".to_string());
+                bottom.tags.insert("DeadWall".to_string());
                 bottom.position = Vec2::new(0.0, -self.arena_half_size.y - 1.0);
                 bottom.half_size = Vec2::new(self.arena_half_size.x, 1.0);
                 self.entities.insert(bottom);
             }
 
-            // ball
+            // player
             {
-                let mut ball = Entity::new();
-                ball.tags.insert("Ball".to_string());
-                ball.collide_with.insert("Wall".to_string());
-                ball.collide_with.insert("Block".to_string());
-                ball.half_size = Vec2::new(0.75, 0.75);
-                ball.position.x = 60.0;
-                ball.velocity.y = -40.0;
-                ball.velocity.x = -30.0;
-                ball.color = Some(0x00ffff);
-                self.balls.push(self.entities.insert(ball));
+                let mut player = Entity::new();
+                player.tags.insert("Player".to_string());
+                player.position.y = -40.0;
+                player.half_size = Vec2::new(10.0, 2.0);
+                player.color = Some(0x00ff00);
+                self.player = Some(self.entities.insert(player));
             }
 
-            for y in 0..8 {
-                for x in 0..8 {
-                    let mut block = Entity::new();
-                    block.tags.insert("Block".to_string());
-                    block.position = Vec2::new(x as f32 * 12.0 - 40.0, y as f32 * 5.0);
-                    block.half_size = Vec2::new(5.0, 2.0);
-                    block.color = Some(0x000000);
-                    block.life = 1;
-                    self.entities.insert(block);
-                }
-            }
+            level.load(&mut self.entities);
+
+            self.current_level = level_index;
+        }
+    }
+
+    pub fn simulate(&mut self, render_buffer: &mut RenderBuffer, input: &Input, dt: f32) {
+        if !self.initialized {
+            self.initialized = true;
+            self.levels.push(Box::new(Level0 {}));
+            self.levels.push(Box::new(Level1 {}));
+
+            self.load_level(0);
         }
 
         // Player Controller
@@ -187,6 +179,9 @@ impl Game {
                                 b.life -= 1;
                             } else if b.tags.contains("Wall") {
                                 a.velocity = a.velocity.reflect(&collision.normal);
+                                if b.tags.contains("DeadWall") {
+                                    a.life -= 1;
+                                }
                             } else if b.tags.contains("Player") {
                                 a.position = a.position + a.velocity * dt * collision.t;
 
@@ -208,16 +203,38 @@ impl Game {
             }
         }
 
-        // Remove block
+        // Remove block, ball
         {
             let mut to_remove_entities = Vec::new();
             for (index, entity) in self.entities.iter().with_index() {
-                if entity.tags.contains("Block") && entity.life == 0 {
+                if (entity.tags.contains("Block") || entity.tags.contains("Ball"))
+                    && entity.life == 0
+                {
                     to_remove_entities.push(index);
                 }
             }
             for index in to_remove_entities.iter() {
                 self.entities.remove(index);
+            }
+        }
+
+        // Level manager
+        {
+            let mut ball_count = 0;
+            for entity in self.entities.iter() {
+                if entity.tags.contains("Ball") {
+                    ball_count += 1;
+                }
+            }
+
+            if ball_count == 0 {
+                self.load_level(self.current_level);
+            }
+
+            if input.mouse.button(Button::Left).pressed() {
+                self.load_level(((self.current_level - 1) + self.levels.len()) % self.levels.len());
+            } else if input.mouse.button(Button::Right).pressed() {
+                self.load_level(((self.current_level + 1) + self.levels.len()) % self.levels.len());
             }
         }
 
@@ -228,12 +245,95 @@ impl Game {
                 render_buffer.draw_rect(entity.position, entity.half_size, color);
             }
 
-            if entity.velocity.len2() > 0.0 {
+            if entity.tags.contains("Ball") && entity.velocity.len2() > 0.0 {
                 render_buffer.draw_line(
                     entity.position,
                     entity.position + entity.velocity.normalized() * 2.0,
                     0xff0000,
                 );
+            }
+        }
+    }
+}
+
+trait Level {
+    fn load(&self, entities: &mut IndexVec<Entity>);
+}
+
+struct Level0 {}
+
+impl Level for Level0 {
+    fn load(&self, entities: &mut IndexVec<Entity>) {
+        // ball
+        {
+            let mut ball = Entity::new();
+            ball.tags.insert("Ball".to_string());
+            ball.collide_with.insert("Wall".to_string());
+            ball.collide_with.insert("Block".to_string());
+            ball.half_size = Vec2::new(0.75, 0.75);
+            ball.position.x = 60.0;
+            ball.velocity.y = -40.0;
+            ball.velocity.x = -30.0;
+            ball.color = Some(0x00ffff);
+            ball.life = 1;
+            entities.insert(ball);
+        }
+
+        for y in 0..8 {
+            for x in 0..8 {
+                let mut block = Entity::new();
+                block.tags.insert("Block".to_string());
+                block.position = Vec2::new(x as f32 * 12.0 - 40.0, y as f32 * 5.0);
+                block.half_size = Vec2::new(5.0, 2.0);
+                block.color = Some(0x000000);
+                block.life = 1;
+                entities.insert(block);
+            }
+        }
+    }
+}
+
+struct Level1 {}
+
+impl Level for Level1 {
+    fn load(&self, entities: &mut IndexVec<Entity>) {
+        // ball
+        {
+            let mut ball = Entity::new();
+            ball.tags.insert("Ball".to_string());
+            ball.collide_with.insert("Wall".to_string());
+            ball.collide_with.insert("Block".to_string());
+            ball.half_size = Vec2::new(0.75, 0.75);
+            ball.position.x = 60.0;
+            ball.velocity.y = -40.0;
+            ball.velocity.x = -30.0;
+            ball.color = Some(0x00ffff);
+            ball.life = 1;
+            entities.insert(ball);
+
+            let mut ball = Entity::new();
+            ball.tags.insert("Ball".to_string());
+            ball.collide_with.insert("Wall".to_string());
+            ball.collide_with.insert("Block".to_string());
+            ball.half_size = Vec2::new(0.75, 0.75);
+            ball.position.x = -60.0;
+            ball.velocity.y = -40.0;
+            ball.velocity.x = 30.0;
+            ball.color = Some(0x00ffff);
+            ball.life = 1;
+            entities.insert(ball);
+        }
+
+        // blocks
+        for y in 0..8 {
+            for x in 0..8 {
+                let mut block = Entity::new();
+                block.tags.insert("Block".to_string());
+                block.position = Vec2::new(x as f32 * 12.0 - 40.0, y as f32 * 5.0);
+                block.half_size = Vec2::new(5.0, 2.0);
+                block.color = Some(0x000000);
+                block.life = 1;
+                entities.insert(block);
             }
         }
     }
