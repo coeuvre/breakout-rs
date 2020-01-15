@@ -1,4 +1,5 @@
 pub mod game;
+pub mod index_vec;
 pub mod input;
 pub mod line;
 pub mod math;

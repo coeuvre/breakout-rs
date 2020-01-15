@@ -40,7 +40,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_SIZE => {
             let mut rect = std::mem::MaybeUninit::uninit();
-            GetWindowRect(hwnd, rect.as_mut_ptr());
+            GetClientRect(hwnd, rect.as_mut_ptr());
             let rect = rect.assume_init();
 
             render_buffer.width = rect.right - rect.left;

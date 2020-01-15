@@ -67,6 +67,7 @@ pub fn line_intersection(
     Some((t, u))
 }
 
+#[derive(Copy, Clone)]
 pub struct Collision2 {
     pub t: f32,
     pub normal: Vec2,
@@ -172,7 +173,11 @@ impl Vec2 {
     }
 
     pub fn len(&self) -> f32 {
-        (self.x * self.x + self.y * self.y).sqrt()
+        self.len2().sqrt()
+    }
+
+    pub fn len2(&self) -> f32 {
+        self.x * self.x + self.y * self.y
     }
 
     pub fn normalized(&self) -> Vec2 {
@@ -195,6 +200,12 @@ impl Vec2 {
 
     pub fn reflect(&self, normal: &Vec2) -> Vec2 {
         self - 2.0 * normal * (normal * self)
+    }
+}
+
+impl Default for Vec2 {
+    fn default() -> Self {
+        Vec2::zero()
     }
 }
 
@@ -346,7 +357,7 @@ mod test {
             &Line2::new(object_center, object_center + object_velocity),
             object_radius,
             obstacle_center,
-            object_radius,
+            obstacle_radius,
         );
         assert!(collision.is_none());
 

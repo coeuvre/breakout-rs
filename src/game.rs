@@ -1,49 +1,44 @@
+use std::collections::HashSet;
+
+use crate::index_vec::{GIndex, IndexVec};
 use crate::input::Input;
 use crate::math::*;
 use crate::software_rendering::*;
 
-#[derive(Copy, Clone)]
-struct Block {
-    center: Vec2,
-    radius: Vec2,
-    life: i32,
+#[derive(Default)]
+pub struct Entity {
+    pub tags: HashSet<String>,
+
+    pub position: Vec2,
+    pub velocity: Vec2,
+    pub half_size: Vec2,
+
+    pub collide_with: HashSet<String>,
+
+    pub life: i32,
+    pub color: Option<u32>,
 }
 
-impl Block {
-    pub fn new() -> Block {
-        Block {
-            center: Vec2::zero(),
-            radius: Vec2::zero(),
-            life: 0,
-        }
+impl Entity {
+    pub fn new() -> Entity {
+        Entity::default()
     }
 }
 
+#[derive(Default)]
 pub struct Game {
     initialized: bool,
-    blocks: Vec<Block>,
     arena_half_size: Vec2,
-    player_p: Vec2,
-    player_half_size: Vec2,
-    player_dp: Vec2,
-    ball_p: Vec2,
-    ball_half_size: Vec2,
-    ball_dp: Vec2,
+
+    entities: IndexVec<Entity>,
+
+    balls: Vec<GIndex>,
+    player: Option<GIndex>,
 }
 
 impl Game {
     pub fn new() -> Game {
-        Game {
-            initialized: false,
-            blocks: Vec::new(),
-            arena_half_size: Vec2::zero(),
-            player_p: Vec2::zero(),
-            player_half_size: Vec2::zero(),
-            player_dp: Vec2::zero(),
-            ball_p: Vec2::zero(),
-            ball_half_size: Vec2::zero(),
-            ball_dp: Vec2::zero(),
-        }
+        Game::default()
     }
 
     pub fn simulate(&mut self, render_buffer: &mut RenderBuffer, input: &Input, dt: f32) {
@@ -52,109 +47,194 @@ impl Game {
 
             self.arena_half_size = Vec2::new(85.0, 45.0);
 
-            self.player_p.y = -40.0;
-            self.player_half_size = Vec2::new(10.0, 2.0);
+            // player
+            {
+                let mut player = Entity::new();
+                player.tags.insert("Player".to_string());
+                player.position.y = -40.0;
+                player.half_size = Vec2::new(10.0, 2.0);
+                player.color = Some(0x00ff00);
+                self.player = Some(self.entities.insert(player));
+            }
 
-            self.ball_half_size = Vec2::new(0.75, 0.75);
-            self.ball_p.x = 40.0;
-            self.ball_dp.y = -40.0;
-            self.ball_dp.x = -10.0;
+            // arena
+            {
+                let mut left = Entity::new();
+                left.tags.insert("Wall".to_string());
+                left.position = Vec2::new(-self.arena_half_size.x - 1.0, 0.0);
+                left.half_size = Vec2::new(1.0, self.arena_half_size.y);
+                self.entities.insert(left);
+
+                let mut right = Entity::new();
+                right.tags.insert("Wall".to_string());
+                right.position = Vec2::new(self.arena_half_size.x + 1.0, 0.0);
+                right.half_size = Vec2::new(1.0, self.arena_half_size.y);
+                self.entities.insert(right);
+
+                let mut top = Entity::new();
+                top.tags.insert("Wall".to_string());
+                top.position = Vec2::new(0.0, self.arena_half_size.y + 1.0);
+                top.half_size = Vec2::new(self.arena_half_size.x, 1.0);
+                self.entities.insert(top);
+
+                let mut bottom = Entity::new();
+                bottom.tags.insert("Wall".to_string());
+                bottom.position = Vec2::new(0.0, -self.arena_half_size.y - 1.0);
+                bottom.half_size = Vec2::new(self.arena_half_size.x, 1.0);
+                self.entities.insert(bottom);
+            }
+
+            // ball
+            {
+                let mut ball = Entity::new();
+                ball.tags.insert("Ball".to_string());
+                ball.collide_with.insert("Wall".to_string());
+                ball.collide_with.insert("Block".to_string());
+                ball.half_size = Vec2::new(0.75, 0.75);
+                ball.position.x = 60.0;
+                ball.velocity.y = -40.0;
+                ball.velocity.x = -30.0;
+                ball.color = Some(0x00ffff);
+                self.balls.push(self.entities.insert(ball));
+            }
 
             for y in 0..8 {
                 for x in 0..8 {
-                    let mut block = Block::new();
-                    block.center = Vec2::new(x as f32 * 12.0 - 40.0, y as f32 * 5.0);
-                    block.radius = Vec2::new(5.0, 2.0);
+                    let mut block = Entity::new();
+                    block.tags.insert("Block".to_string());
+                    block.position = Vec2::new(x as f32 * 12.0 - 40.0, y as f32 * 5.0);
+                    block.half_size = Vec2::new(5.0, 2.0);
+                    block.color = Some(0x000000);
                     block.life = 1;
-                    self.blocks.push(block);
+                    self.entities.insert(block);
                 }
             }
         }
 
-        let mouse_p = render_buffer.pixels_to_world(input.mouse.position);
+        // Player Controller
+        {
+            if let Some(player) = self.player.and_then(|player| self.entities.get_mut(player)) {
+                let mouse_p = render_buffer.pixels_to_world(input.mouse.position);
+                let new_player_p = Vec2::new(mouse_p.x, player.position.y);
+                player.velocity = (new_player_p - player.position) / dt;
+            }
+        }
 
-        let new_player_p = Vec2::new(mouse_p.x, self.player_p.y);
-        let mut player_movement = Line2::new(self.player_p, new_player_p);
-        let player_dp = (player_movement.end - player_movement.start) / dt;
-
-        let mut ball_movement = Line2::new(self.ball_p, self.ball_p + (self.ball_dp) * dt);
-
-        let mut ball_relative_player_movement = Line2::new(
-            self.ball_p,
-            self.ball_p + ball_movement.vec() - player_movement.vec(),
-        );
-
-        // ball vs player
-        if self.ball_dp.y < 0.0 {
-            if let Some(collision) = swept_aabb2(
-                &ball_relative_player_movement,
-                self.ball_half_size,
-                self.player_p,
-                self.player_half_size,
-            ) {
-                if ball_relative_player_movement.vec() * collision.normal <= 0.0 {
-                    if collision.normal.x != 0.0 {
-                        self.ball_dp.y *= -1.0;
-                        if self.ball_dp * collision.normal <= 0.0 {
-                            self.ball_dp.x *= -1.0;
-                        }
+        {
+            for entity in self.entities.iter_mut() {
+                if entity.tags.contains("Ball") {
+                    if entity.velocity.y < 0.0 {
+                        entity.collide_with.insert("Player".to_string());
                     } else {
-                        self.ball_dp = self.ball_dp.reflect(&collision.normal);
+                        entity.collide_with.remove("Player");
                     }
-                    self.ball_dp.x += player_dp.x * 0.1;
-                    ball_movement.truncate(collision.t);
-                    player_movement.truncate(collision.t);
                 }
             }
         }
 
-        self.player_p = player_movement.end;
-        self.player_dp = player_dp;
+        // Common collision and movement
+        {
+            let mut collisions = Vec::new();
+            for (index_a, a) in self.entities.iter().with_index() {
+                if a.velocity.len2() == 0.0 {
+                    continue;
+                }
 
-        // ball vs blocks
-        for block in self.blocks.iter_mut() {
-            if let Some(collision) = swept_aabb2(
-                &ball_movement,
-                self.ball_half_size,
-                block.center,
-                block.radius,
-            ) {
-                if ball_movement.vec() * collision.normal <= 0.0 {
-                    ball_movement.truncate(collision.t);
-                    self.ball_dp = self.ball_dp.reflect(&collision.normal);
-                    block.life -= 1;
+                let mut t = 1.0f32;
+                let mut c = None;
+
+                for (index_b, b) in self.entities.iter().with_index() {
+                    if index_a == index_b {
+                        continue;
+                    }
+
+                    let mut collided_with = false;
+
+                    for tag in a.collide_with.iter() {
+                        if b.tags.contains(tag) {
+                            collided_with = true;
+                            break;
+                        }
+                    }
+
+                    if collided_with {
+                        let movement =
+                            Line2::new(a.position, a.position + (a.velocity - b.velocity) * dt);
+                        if let Some(collision) =
+                            swept_aabb2(&movement, a.half_size, b.position, b.half_size)
+                        {
+                            if movement.vec() * collision.normal <= 0.0 {
+                                if collision.t < t {
+                                    t = collision.t;
+                                    c = Some((index_b, collision));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                collisions.push((index_a, c));
+            }
+
+            for (index_a, c) in collisions.iter() {
+                if let Some((index_b, collision)) = c {
+                    if let (Some(a), Some(b)) = self.entities.get_two_mut(index_a, index_b) {
+                        a.position = a.position + a.velocity * dt * collision.t;
+
+                        if a.tags.contains("Ball") {
+                            if b.tags.contains("Block") {
+                                a.velocity = a.velocity.reflect(&collision.normal);
+                                b.life -= 1;
+                            } else if b.tags.contains("Wall") {
+                                a.velocity = a.velocity.reflect(&collision.normal);
+                            } else if b.tags.contains("Player") {
+                                a.position = a.position + a.velocity * dt * collision.t;
+
+                                if collision.normal.x != 0.0 {
+                                    a.velocity.y *= -1.0;
+                                    if a.velocity * collision.normal <= 0.0 {
+                                        a.velocity.x *= -1.0;
+                                    }
+                                } else {
+                                    a.velocity = a.velocity.reflect(&collision.normal);
+                                }
+                                a.velocity.x = (a.position.x - b.position.x) * 7.5;
+                            }
+                        }
+                    }
+                } else if let Some(a) = self.entities.get_mut(index_a) {
+                    a.position = a.position + a.velocity * dt;
                 }
             }
         }
 
-        self.blocks.retain(|block| block.life > 0);
-
-        // ball vs arena
-        if let Some(collision) = swept_aabb2(
-            &ball_movement,
-            -self.ball_half_size,
-            Vec2::zero(),
-            self.arena_half_size,
-        ) {
-            if (ball_movement.end - ball_movement.start) * collision.normal >= 0.0 {
-                ball_movement.truncate(collision.t);
-                self.ball_dp = self.ball_dp.reflect(&collision.normal);
+        // Remove block
+        {
+            let mut to_remove_entities = Vec::new();
+            for (index, entity) in self.entities.iter().with_index() {
+                if entity.tags.contains("Block") && entity.life == 0 {
+                    to_remove_entities.push(index);
+                }
+            }
+            for index in to_remove_entities.iter() {
+                self.entities.remove(index);
             }
         }
-
-        self.ball_p = ball_movement.end;
 
         render_buffer.clear_and_draw_rect(Vec2::zero(), self.arena_half_size, 0x551100, 0x220500);
 
-        for block in self.blocks.iter() {
-            render_buffer.draw_rect(block.center, block.radius, 0x000000);
+        for entity in self.entities.iter() {
+            if let Some(color) = entity.color {
+                render_buffer.draw_rect(entity.position, entity.half_size, color);
+            }
+
+            if entity.velocity.len2() > 0.0 {
+                render_buffer.draw_line(
+                    entity.position,
+                    entity.position + entity.velocity.normalized() * 2.0,
+                    0xff0000,
+                );
+            }
         }
-        render_buffer.draw_rect(self.player_p, self.player_half_size, 0x00ff00);
-        render_buffer.draw_rect(self.ball_p, self.ball_half_size, 0x00ffff);
-        render_buffer.draw_line(
-            self.ball_p,
-            self.ball_p + self.ball_dp.normalized() * 2.0,
-            0x00ffff,
-        );
     }
 }
