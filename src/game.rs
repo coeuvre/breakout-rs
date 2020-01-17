@@ -6,9 +6,16 @@ use crate::input::Input;
 use crate::math::*;
 use crate::software_rendering::*;
 
+#[derive(Clone)]
+pub enum PowerUp {
+    Invincible
+}
+
 #[derive(Default, Clone)]
 pub struct Entity {
     pub tags: HashSet<String>,
+
+    pub invincible: f32,
 
     pub position: Vec2,
     pub velocity: Vec2,
@@ -18,6 +25,8 @@ pub struct Entity {
 
     pub life: i32,
     pub color: Option<u32>,
+
+    pub spawn_power_ups: Vec<PowerUp>,
 }
 
 impl Entity {
@@ -78,13 +87,14 @@ impl Game {
                 self.entities.insert(bottom);
             }
 
-            // player
+            // Player
             {
                 let mut player = Entity::new();
                 player.tags.insert("Player".to_string());
                 player.position.y = -40.0;
                 player.half_size = Vec2::new(10.0, 2.0);
                 player.color = Some(0x00ff00);
+                player.life = 1;
                 self.player = Some(self.entities.insert(player));
             }
 
@@ -112,6 +122,7 @@ impl Game {
             }
         }
 
+        // Ball Controller
         {
             for entity in self.entities.iter_mut() {
                 if entity.tags.contains("Ball") {
@@ -124,41 +135,48 @@ impl Game {
             }
         }
 
-        // Common collision and movement
+        // Count down
+        {
+            for entity in self.entities.iter_mut() {
+                entity.invincible = (entity.invincible - dt).max(0.0);
+            }
+        }
+
+        let is_player_invincible = self.player.and_then(|index| self.entities.get(index)).map(|player| player.invincible > 0.0).unwrap_or(false);
+
+        // Collision detection and response
         {
             let mut collisions = Vec::new();
             for (index_a, a) in self.entities.iter().with_index() {
-                if a.velocity.len2() == 0.0 {
-                    continue;
-                }
-
                 let mut t = 1.0f32;
                 let mut c = None;
 
-                for (index_b, b) in self.entities.iter().with_index() {
-                    if index_a == index_b {
-                        continue;
-                    }
-
-                    let mut collided_with = false;
-
-                    for tag in a.collide_with.iter() {
-                        if b.tags.contains(tag) {
-                            collided_with = true;
-                            break;
+                if !a.collide_with.is_empty() {
+                    for (index_b, b) in self.entities.iter().with_index() {
+                        if index_a == index_b {
+                            continue;
                         }
-                    }
 
-                    if collided_with {
-                        let movement =
-                            Line2::new(a.position, a.position + (a.velocity - b.velocity) * dt);
-                        if let Some(collision) =
+                        let mut collided_with = false;
+
+                        for tag in a.collide_with.iter() {
+                            if b.tags.contains(tag) {
+                                collided_with = true;
+                                break;
+                            }
+                        }
+
+                        if collided_with {
+                            let movement =
+                                Line2::new(a.position, a.position + (a.velocity - b.velocity) * dt);
+                            if let Some(collision) =
                             swept_aabb2(&movement, a.half_size, b.position, b.half_size)
-                        {
-                            if movement.vec() * collision.normal <= 0.0 {
-                                if collision.t < t {
-                                    t = collision.t;
-                                    c = Some((index_b, collision));
+                            {
+                                if movement.vec() * collision.normal <= 0.0 {
+                                    if collision.t < t {
+                                        t = collision.t;
+                                        c = Some((index_b, collision));
+                                    }
                                 }
                             }
                         }
@@ -171,20 +189,18 @@ impl Game {
             for (index_a, c) in collisions.iter() {
                 if let Some((index_b, collision)) = c {
                     if let (Some(a), Some(b)) = self.entities.get_two_mut(index_a, index_b) {
-                        a.position = a.position + a.velocity * dt * collision.t;
-
                         if a.tags.contains("Ball") {
+                            a.position = a.position + a.velocity * dt * collision.t;
+
                             if b.tags.contains("Block") {
                                 a.velocity = a.velocity.reflect(&collision.normal);
                                 b.life -= 1;
                             } else if b.tags.contains("Wall") {
                                 a.velocity = a.velocity.reflect(&collision.normal);
-                                if b.tags.contains("DeadWall") {
+                                if !is_player_invincible && b.tags.contains("DeadWall") {
                                     a.life -= 1;
                                 }
                             } else if b.tags.contains("Player") {
-                                a.position = a.position + a.velocity * dt * collision.t;
-
                                 if collision.normal.x != 0.0 {
                                     a.velocity.y *= -1.0;
                                     if a.velocity * collision.normal <= 0.0 {
@@ -194,6 +210,13 @@ impl Game {
                                     a.velocity = a.velocity.reflect(&collision.normal);
                                 }
                                 a.velocity.x = (a.position.x - b.position.x) * 7.5;
+                            }
+                        } else if a.tags.contains("PowerUp") {
+                            if b.tags.contains("Wall") {
+                                a.life -= 1;
+                            } else if b.tags.contains("Player") {
+                                a.life -= 1;
+                                b.invincible += 10.0;
                             }
                         }
                     }
@@ -205,16 +228,38 @@ impl Game {
 
         // Remove block, ball
         {
+            let mut new_entities = Vec::new();
             let mut to_remove_entities = Vec::new();
             for (index, entity) in self.entities.iter().with_index() {
-                if (entity.tags.contains("Block") || entity.tags.contains("Ball"))
-                    && entity.life == 0
-                {
-                    to_remove_entities.push(index);
+                if entity.life == 0 {
+                    if entity.tags.contains("Block") {
+                        to_remove_entities.push(index);
+
+                        if entity.spawn_power_ups.len() > 0 {
+                            let mut power_up = Entity::new();
+                            power_up.tags.insert("PowerUp".to_string());
+                            power_up.position = entity.position;
+                            power_up.velocity = Vec2::new(0.0, -10.0);
+                            power_up.half_size = Vec2::new(1.0, 1.0);
+                            power_up.collide_with.insert("Wall".to_string());
+                            power_up.collide_with.insert("Player".to_string());
+                            power_up.life = 1;
+                            power_up.color = Some(0xffff00);
+                            new_entities.push(power_up);
+                        }
+                    } else if entity.tags.contains("Ball") {
+                        to_remove_entities.push(index);
+                    } else if entity.tags.contains("PowerUp") {
+                        to_remove_entities.push(index);
+                    }
                 }
             }
             for index in to_remove_entities.iter() {
                 self.entities.remove(index);
+            }
+
+            for entity in new_entities.into_iter() {
+                self.entities.insert(entity);
             }
         }
 
@@ -242,7 +287,11 @@ impl Game {
 
         for entity in self.entities.iter() {
             if let Some(color) = entity.color {
-                render_buffer.draw_rect(entity.position, entity.half_size, color);
+                if entity.invincible > 0.0 {
+                    render_buffer.draw_rect(entity.position, entity.half_size, 0xffffff);
+                } else {
+                    render_buffer.draw_rect(entity.position, entity.half_size, color);
+                }
             }
 
             if entity.tags.contains("Ball") && entity.velocity.len2() > 0.0 {
@@ -287,6 +336,7 @@ impl Level for Level0 {
                 block.half_size = Vec2::new(5.0, 2.0);
                 block.color = Some(0x000000);
                 block.life = 1;
+                if y == 0 { block.spawn_power_ups.push(PowerUp::Invincible); }
                 entities.insert(block);
             }
         }
